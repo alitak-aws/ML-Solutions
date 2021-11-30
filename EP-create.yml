@@ -1,0 +1,361 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description : "AWS CloudFormation Sample Template "
+  
+
+Resources:
+  
+  RoleOnboardingInstall:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Sub 'states.${AWS::Region}.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: lambda
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+      RoleName: 'onboard'
+
+  LambdaExeRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - sagemaker.amazonaws.com
+                - glue.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonSageMakerFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+        - 'arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonSNSFullAccess'
+      RoleName: 'lambdaExe'
+
+
+  dynamodbTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - 
+          AttributeName: "RunId"
+          AttributeType: "S"
+        # -
+        #   AttributeName: "trainingDate"
+        #   AttributeType: "S"
+      KeySchema:
+        - 
+          AttributeName: "RunId"
+          KeyType: "HASH"
+        # - 
+        #   AttributeName: "trainingDate"
+        #   KeyType: "RANGE"
+      TableName: "Ali"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+
+  # lambdaFunction:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     Description: 'put item'
+  #     FunctionName: 'updateDDB'
+  #     Handler: index.lambda_handler
+  #     MemorySize: 128
+  #     Role: !GetAtt LambdaExeRole.Arn
+  #     Runtime:  python3.6 
+  #     Timeout: 900
+  #     # Environment:
+  #     #   Variables:
+  #     #     key1: value1 # A map of key-value pairs that the Lambda function can access
+  #     Code:
+  #       ZipFile: |
+  #         import boto3
+  #         import json
+  #         import decimal
+  #         import datetime
+
+  #         from boto3.dynamodb.conditions import Key, Attr
+
+  #         def lambda_handler(event, context):
+  #           dynamodb = boto3.resource('dynamodb')
+  #           table = dynamodb.Table('Ali')
+  #           response = table.put_item(
+  #             Item={
+  #                 'RunId': '0',
+  #                 'trainingDate': str(datetime.date.today()),
+  #                 'classificationMetrics': str(2.3),
+  #                 'classificationModelLocation': 's3'
+  #             }
+  #           )
+  #           return response
+
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'st-ali-${AWS::AccountId}'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 9ac007d8-d72b-4ad5-8e73-c087e4317650
+
+  Train:
+    Type: 'AWS::Lambda::Function'
+    # DependsOn: S3Bucket
+    Properties:
+      FunctionName: Train
+      Description: Lambda Model Train
+      Handler: train.lambda_handler
+      Runtime: python3.6
+      Timeout: 10
+      Role: !GetAtt LambdaExeRole.Arn
+      Code:
+        S3Bucket: simplified-0310
+        S3Key: lambdas/train.zip
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref S3Bucket
+          source_bucket: simplified-0310
+          role: !GetAtt LambdaExeRole.Arn
+          container: 246618743249.dkr.ecr.us-west-2.amazonaws.com/sagemaker-xgboost:0.90-1-cpu-py3
+
+
+
+#   # Predict:
+#   #   Type: 'AWS::Lambda::Function'
+#   #   DependsOn: S3Bucket
+#   #   Properties:
+#   #     FunctionName: Predict
+#   #     Description: Lambda Model Predict
+#   #     Handler: predict.lambda_handler
+#   #     Runtime: python3.6
+#   #     Role: !GetAtt LambdaExeRole.Arn
+#   #     Timeout: 900
+#   #     MemorySize: 1024
+#   #     Code:
+#   #       S3Bucket: iqvia-blog
+#   #       S3Key: lambdas/update-EP.zip
+#   #     Environment:
+#   #       Variables:
+#   #         bucket: 
+#   #   Metadata:
+#   #     'AWS::CloudFormation::Designer':
+#   #       id: 46da9cd0-680e-4f0f-b027-727f011cc57a
+
+
+  # Update:
+  #   Type: 'AWS::Lambda::Function'
+  #   Properties:
+  #     FunctionName: Update
+  #     Description: Lambda Model Update
+  #     Handler: update_EP.lambda_handler
+  #     Runtime: python3.6
+  #     Timeout: 300
+  #     Role: !GetAtt LambdaExeRole.Arn
+  #     Code:
+  #       S3Bucket: simplified-0310
+  #       S3Key: lambdas/update_EP.zip
+  #     Environment:
+  #       Variables:
+  #         role: !GetAtt LambdaExeRole.Arn
+  #         source_bucket: simplified-0310
+  #         container: 246618743249.dkr.ecr.us-west-2.amazonaws.com/sagemaker-xgboost:0.90-1-cpu-py3
+  #         TABLE_NAME: Ali
+  #         endpoint: test1
+
+
+  create:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: Create
+      Description: Lambda Model Create
+      Handler: create_EP.lambda_handler
+      Runtime: python3.6
+      Timeout: 600
+      Role: !GetAtt LambdaExeRole.Arn
+      Code:
+        S3Bucket: simplified-0310
+        S3Key: lambdas/create_EP.zip
+      Environment:
+        Variables:
+          role: !GetAtt LambdaExeRole.Arn
+          source_bucket: simplified-0310
+          container: 246618743249.dkr.ecr.us-west-2.amazonaws.com/sagemaker-xgboost:0.90-1-cpu-py3
+          TABLE_NAME: Ali
+          endpoint: test1
+    # Metadata:
+    #   'AWS::CloudFormation::Designer':
+    #     id: 029c83fa-ccf9-4241-a6ab-44378a5e2709
+
+
+  await:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: Await
+      Description: Lambda Model Await
+      Handler: wait.lambda_handler
+      Runtime: python3.6
+      Role: !GetAtt LambdaExeRole.Arn
+      Code:
+        S3Bucket: simplified-0310
+        S3Key: lambdas/wait.zip
+      Environment:
+        Variables:
+          role: !GetAtt LambdaExeRole.Arn
+    # Metadata:
+    #   'AWS::CloudFormation::Designer':
+    #     id: 34c591db-4e05-48ac-98a8-f3e04c9e72dc
+
+
+  
+
+  ETLJob:
+    Type: 'AWS::Glue::Job'
+    Properties:
+      Command:
+        Name: pythonshell
+        PythonVersion: "3"
+        ScriptLocation: 's3://simplified-0310/ETL-classification.py'
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      MaxCapacity: 1
+      MaxRetries: 0
+      Name: etl
+      Role: !GetAtt LambdaExeRole.Arn
+      DefaultArguments:
+        '--Bucket_source': 'simplified-0310'
+        '--Bucket_target': !Ref S3Bucket
+        '--extra-py-files': 's3://simplified-0310/Glue-py-files/ner_utils-0.1-py3-none-any.whl,s3://simplified-0310/Glue-py-files/utils.py,s3://simplified-0310/Glue-py-files/tokenization.py,s3://simplified-0310/Glue-py-files/doc2table.py,s3://simplified-0310/Glue-py-files/regex-2020.10.15-cp36-cp36m-manylinux1_i686.whl'
+    # Metadata:
+    #   'AWS::CloudFormation::Designer':
+    #     id: 2b048504-16bc-495b-b075-e01d0a4af037
+
+  # notifyUser:
+  #   Type: AWS::SNS::Topic
+  #   Properties:
+  #     DisplayName: 'ALI'
+  #     Subscription: 
+  #       - Endpoint:
+  #           '+12067073536'
+  #         Protocol: 'SMS'
+  #       - Endpoint: 
+  #         'alitakb@amazon.com'
+  #         protocol: 'EMAIL'
+  #     TopicName: 'sendNotification'
+
+  StateCreate:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub |
+        {
+            "StartAt": "ETL",
+            "States": {
+                "ETL": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::glue:startJobRun.sync",
+                    "Parameters": {
+                        "JobName": "etl",
+                        "MaxCapacity": 1,
+                        "Arguments": {
+                              "--isNew.$":"$.isNew"
+                                }
+                    },
+                    "Next": "StartTraining"
+                },         
+                "StartTraining": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:us-west-2:${AWS::AccountId}:function:Train",
+                    "ResultPath": "$",
+                    "Next": "CheckStatusTraining"
+                },
+                "CheckStatusTraining": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:us-west-2:${AWS::AccountId}:function:Await",
+                    "ResultPath": "$",
+                    "Next": "CheckTrainingBranch"
+                },
+                "CheckTrainingBranch": {
+                    "Type": "Choice",
+                    "Choices": 
+                    [
+                        {
+                            "Or": 
+                            [
+                                {
+                                    "Variable": "$.status",
+                                    "StringEquals": "Completed"
+                                }
+                            ],
+                            "Next": "CreateEP"
+                        },
+                        {
+                            "Or": 
+                            [
+                                {
+                                    "Variable": "$.status",
+                                    "StringEquals": "InProgress"
+                                }
+                            ],
+                            "Next": "WaitStatusTraining"
+                        },
+                        {
+                            "Or": 
+                            [
+                                {
+                                    "Variable": "$.status",
+                                    "StringEquals": "Failed"
+                                }
+                            ],
+                            "Next": "NotifyUser"
+                        }
+                    ]
+                },
+                "WaitStatusTraining": {
+                    "Type": "Wait",
+                    "Seconds": 60,
+                    "Next": "CheckStatusTraining"
+                },
+                "CreateEP": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:us-west-2:${AWS::AccountId}:function:Create",
+                    "ResultPath": "$",
+                    "Next": "NotifyUser"
+                },
+                "NotifyUser": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::sns:publish",
+                    "Parameters": {
+                        "TopicArn": "arn:aws:sns:us-west-2:${AWS::AccountId}:notifyUser",
+                        "Message.$": "States.Format('Results : {}',$.body)"
+                    },
+                    "End": true
+                }
+            }
+        }
+      RoleArn: !GetAtt RoleOnboardingInstall.Arn
+      StateMachineName: CreateEP
+
+
+  # step input
+  # {  "isNew": "meta"}
+
+
+Outputs:
+  S3Bucket:
+    Value: !Ref S3Bucket
+    Description: S3 Bucket for object storage

@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description : "AWS CloudFormation Sample Template SNSToSQS: This Template updates an ."
+  
+
+Resources:
+
+  Predict:
+    Type: 'AWS::Lambda::Function'
+    # DependsOn: S3Bucket
+    Properties:
+      FunctionName: Predict
+      Description: Lambda Model Predict
+      Handler: predict.lambda_handler
+      Runtime: python3.6
+      Role: !Join [':', ['arn:aws:iam:', !Ref 'AWS::AccountId', 'role/lambdaExe']] 
+      Timeout: 900
+      MemorySize: 1024
+      Code:
+        ZipFile: |
+          import boto3
+          from botocore.client import Config
+          import boto3
+          import json
+          import os
+
+          Region = boto3.session.Session().region_name
+          endpoint = os.getenv('endpoint') 
+
+          config = Config(connect_timeout=10000000, read_timeout=10000000, retries={'max_attempts': 3}, region_name = "Region")
+          client = boto3.client('sagemaker-runtime', config=config)
+          content_type = "application/json"
+          accept = "application/json"
+          max_char_len = 250000
+
+          def invoke_classifier(event, context):
+            response = client.invoke_endpoint(
+                EndpointName=endpoint,
+                ContentType=content_type,
+                Accept=accept,
+                Body=json.dumps({'text': event['text']}).encode('utf-8')
+            )
+            results = json.loads(response['Body'].read())
+
+            return results
+
+      Environment:
+        Variables:
+          endpoint:  test1
+
+  # update:
+  #   Type: 'AWS::Lambda::Function'
+  #   Properties:
+  #     FunctionName: Update
+  #     Description: Lambda Model Update
+  #     Handler: update_EP.lambda_handler
+  #     Runtime: python3.6
+  #     Timeout: 600
+  #     Role: !Join [':', ['arn:aws:iam:', !Ref 'AWS::AccountId', 'role/LambdaExeRole']] 
+  #     Code:
+  #       S3Bucket: simplified-0310
+  #       S3Key: lambdas/update_EP.zip
+  #     Environment:
+  #       Variables:
+  #         role: !Join [':', ['arn:aws:iam:', !Ref 'AWS::AccountId', 'role/LambdaExeRole']] 
+  #         source_bucket: simplified-0310
+  #         container: 246618743249.dkr.ecr.us-west-2.amazonaws.com/sagemaker-xgboost:0.90-1-cpu-py3
+  #         TABLE_NAME: Ali
+  #         endpoint: test1
+
+
+
+  notifyUser:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: 'ALI'
+      Subscription: 
+        - Endpoint: '+12067073536'
+          Protocol: 'SMS'
+        - Endpoint: 'alitakb@amazon.com'
+          Protocol: 'EMAIL'
+      TopicName: 'sendNotification'
+
+
+  StateUpdate:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub |
+        {
+            "StartAt": "ETL",
+            "States": {
+                "ETL": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::glue:startJobRun.sync",
+                    "Parameters": {
+                        "JobName": "etl",
+                        "MaxCapacity": 1,
+                        "Arguments": {
+                              "--isNew.$":"$.isNew"
+                                }
+                    },
+                    "Next": "StartTraining"
+                },         
+                "StartTraining": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:us-west-2:${AWS::AccountId}:function:Train",
+                    "ResultPath": "$",
+                    "Next": "CheckStatusTraining"
+                },
+                "CheckStatusTraining": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:us-west-2:${AWS::AccountId}:function:Await",
+                    "ResultPath": "$",
+                    "Next": "CheckTrainingBranch"
+                },
+                "CheckTrainingBranch": {
+                    "Type": "Choice",
+                    "Choices": 
+                    [
+                        {
+                            "Or": 
+                            [
+                                {
+                                    "Variable": "$.status",
+                                    "StringEquals": "Completed"
+                                }
+                            ],
+                            "Next": "DeployandUpdateEP"
+                        },
+                        {
+                            "Or": 
+                            [
+                                {
+                                    "Variable": "$.status",
+                                    "StringEquals": "InProgress"
+                                }
+                            ],
+                            "Next": "WaitStatusTraining"
+                        },
+                        {
+                            "Or": 
+                            [
+                                {
+                                    "Variable": "$.status",
+                                    "StringEquals": "Failed"
+                                }
+                            ],
+                            "Next": "NotifyUser"
+                        }
+                    ]
+                },
+                "WaitStatusTraining": {
+                    "Type": "Wait",
+                    "Seconds": 60,
+                    "Next": "CheckStatusTraining"
+                },
+                "DeployandUpdateEP": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:us-west-2:${AWS::AccountId}:function:Update",
+                    "ResultPath": "$",
+                    "Next": "NotifyUser"
+                },
+                "NotifyUser": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::sns:publish",
+                    "Parameters": {
+                        "TopicArn": "arn:aws:sns:us-west-2:${AWS::AccountId}:notifyUser",
+                        "Message.$": "States.Format('Results : {}',$.body)"
+                    },
+                    "End": true
+                }
+            }
+        }
+      RoleArn: !Join [':', ['arn:aws:iam:', !Ref 'AWS::AccountId', 'role/onboard']]
+      StateMachineName: UpdateEP
+
+
+
+  # step input
+  # {  "isNew": "New_meta"}
+
+
+
+
+
+
+# Outputs:
+#   S3Bucket:
+#     Value: !Ref S3Bucket
+#     Description: S3 Bucket for object storage
